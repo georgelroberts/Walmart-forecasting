@@ -34,7 +34,7 @@ features = pd.read_csv('Data\\features.csv')
 
 
 def dataDescription(train):
-
+    """ Initial look at the data. 3 Plots are generated. """
     print(train.describe())
     # No NaNs
     print(train.head())
@@ -71,6 +71,8 @@ dataDescription(train)
 
 
 def extractFeatures(sample, features):
+    """ Not many features are extracted, but this is useful to functionalise.
+    More features can be added as necessary later"S"""
     sample = pd.merge(sample, features, on=['Store', 'Date'])
 
     # Extract features from the Date
@@ -82,7 +84,7 @@ def extractFeatures(sample, features):
 
 train = extractFeatures(train, features)
 
-# %% Clean and fit the data
+# %% Fit the data
 
 # Separate the data into train and CV by taking progressive splits from the end
 # ie split it into 6 sections. Train on 1, CV 2; train on
@@ -90,7 +92,7 @@ train = extractFeatures(train, features)
 
 # Only use features if they have no NaNs for the moment
 
-n_splits = 8
+n_splits = 4
 
 predCols = ['Store', 'Dept', 'WeekOfYear', 'Year', 'IsHoliday_x',
             'Temperature', 'Fuel_Price']
@@ -98,6 +100,8 @@ predCols = ['Store', 'Dept', 'WeekOfYear', 'Year', 'IsHoliday_x',
 # %% XGBoost
 
 def findXGBErrorOnFit(n_splits, train, predCols):
+    """ Use the time series split to create cross validation sets and measure
+    the average error across all of them after fitting with xgboost"""
     tsCV = TimeSeriesSplit(n_splits=n_splits)
 
     pipe = Pipeline([
@@ -130,6 +134,9 @@ CVerrorXGB = findXGBErrorOnFit(n_splits, train, predCols)
 # %% SVM
 
 def findSGDErrorOnFit(n_splits, train, predCols):
+    """ Use the time series split to create cross validation sets and measure
+    the average error across all of them after fitting with SGDRegressor"""
+
     tsCV = TimeSeriesSplit(n_splits=n_splits)
 
     pipe = Pipeline([
@@ -161,6 +168,7 @@ CVerrorSGD = findSGDErrorOnFit(n_splits, train, predCols)
 # %% Test prediction and submission
 
 def predictAndSubmit(train, features, predCols):
+    """ Reformat the data for submission and save the generated predictions"""
     realTest = pd.read_csv('Data\\test.csv')
     sub = pd.DataFrame()
     sub['Id'] = (realTest['Store'].map(str) + '_' +
