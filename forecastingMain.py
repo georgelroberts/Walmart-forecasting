@@ -18,7 +18,10 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
+from sklearn.linear_model import SGDRegressor
 import xgboost as xgb
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # %% First load the data
 
@@ -66,30 +69,41 @@ dataDescription(train)
 # %% Add more features
 
 # Marge extra features
-train = pd.merge(train,features, on=['Store','Date'])
 
-# Extract features from the Date
-train['Date'] = pd.to_datetime(train['Date'])
-train['WeekOfYear'] = train['Date'].dt.weekofyear
-train['Year'] = train['Date'].dt.year
+def extractFeatures(sample, features):
+    sample = pd.merge(sample,features, on=['Store','Date'])
+
+    # Extract features from the Date
+    sample['Date'] = pd.to_datetime(sample['Date'])
+    sample['WeekOfYear'] = sample['Date'].dt.weekofyear
+    sample['Year'] = sample['Date'].dt.year
+    return sample
+
+train = extractFeatures(train, features)
 
 # %% Clean and fit the data
 
 # Separate the data into train and CV by taking progressive splits from the end
 # ie split it into 6 sections. Train on 1, CV 2; train on
 # 1,2, CV 3... until train on 1,2,3,4,5 CV 6
+
+# Only use features if they have no NaNs for the moment
+
 n_splits = 8
 
-def findErrorOnFit(n_splits, xgb_n_estimators, train):
+predCols = ['Store', 'Dept', 'WeekOfYear','Year', 'IsHoliday_x','Temperature',
+            'Fuel_Price']
+
+# %% XGBoost
+
+def findXGBErrorOnFit(n_splits, train, predCols):
     tsCV = TimeSeriesSplit(n_splits=n_splits)
 
     pipe = Pipeline([
             ('scal', StandardScaler()),
             ('clf', xgb.XGBRegressor(learning_rate=0.07, max_depth=6,
-                                     n_estimators=xgb_n_estimators))])
+                                     n_estimators=100))])
 
-    predCols = ['Store', 'Dept', 'WeekOfYear','Year', 'IsHoliday_x',
-                'Temperature', 'Fuel_Price', 'CPI', 'Unemployment']
     CVerror = 0
     for train_ind, CV_ind in tsCV.split(train):
         trainMod = train.iloc[train_ind]
@@ -108,9 +122,56 @@ def findErrorOnFit(n_splits, xgb_n_estimators, train):
     print("The mean cross-validated error is ${:.2f}".format(CVerror))
     return CVerror
 
-n_estimators = [10,100,500]
-CVerrors=[]
+CVerrorXGB = findXGBErrorOnFit(n_splits, train)
 
-for n_estimator in n_estimators:
-    CVerrors.append(findErrorOnFit(5, n_estimator, train))
+# %% SVM
+
+def findSGDErrorOnFit(n_splits, train, predCols)):
+    tsCV = TimeSeriesSplit(n_splits=n_splits)
+
+    pipe = Pipeline([
+            ('scal', StandardScaler()),
+            ('clf', SGDRegressor())])
+
+    CVerror = 0
+    for train_ind, CV_ind in tsCV.split(train):
+        trainMod = train.iloc[train_ind]
+        CVMod = train.iloc[CV_ind]
+
+        trainX = trainMod[predCols]
+        trainY = trainMod['Weekly_Sales']
+        CVX = CVMod[predCols]
+        CVY = CVMod['Weekly_Sales']
+        pipe.fit(trainX, trainY)
+        prediction = pipe.predict(CVX)
+        CVerror += mean_absolute_error(CVY, prediction)
+
+    # Print the mean absolute error of the regressor
+    CVerror /= n_splits
+    print("The mean cross-validated error is ${:.2f}".format(CVerror))
+    return CVerror
+
+CVerrorSGD = findSGDErrorOnFit(n_splits, train)
+
+# %% Test prediction and submission
+
+def predictAndSubmit(train, features, predCols):
+    realTest = pd.read_csv('Data\\test.csv')
+    sub = pd.DataFrame()
+    sub['Id'] = (realTest['Store'].map(str) + '_' +
+                 realTest['Dept'].map(str) + '_' +
+                 realTest['Date'].map(str))
+
+    realTest = extractFeatures(realTest, features)
+    realTestX = realTest[predCols]
+    pipe = Pipeline([('scal', StandardScaler()),
+                     ('clf', xgb.XGBRegressor(learning_rate=0.07, max_depth=6,
+                                              n_estimators=100))])
+    trainX = train[predCols]
+    trainY = train['Weekly_Sales']
+    pipe.fit(trainX, trainY)
+    prediction = pipe.predict(realTestX)
+    sub['Weekly_Sales'] = prediction
+    sub.to_csv('Output\\XGBSubmission.csv', index=False)
+
 
