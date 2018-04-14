@@ -32,6 +32,7 @@ features = pd.read_csv('Data\\features.csv')
 
 # %% Describe elements of the data
 
+
 def dataDescription(train):
 
     print(train.describe())
@@ -59,8 +60,8 @@ def dataDescription(train):
     # Very few holiday days...
     # What are the average sales on holidays vs not holidays
     holidaySales = train[train['IsHoliday'] == True].Weekly_Sales.mean()
-    nonHolidaySales = train[train['IsHoliday']==False].Weekly_Sales.mean()
-    print("The mean weekly sales on a holiday is {:.2f} ".format(holidaySales) +
+    nonHolidaySales = train[train['IsHoliday'] == False].Weekly_Sales.mean()
+    print("The mean weekly sales on holidays is {:.2f} ".format(holidaySales) +
           "and then {:.2f} for non-holidays.".format(nonHolidaySales))
 
 
@@ -68,16 +69,16 @@ dataDescription(train)
 
 # %% Add more features
 
-# Marge extra features
 
 def extractFeatures(sample, features):
-    sample = pd.merge(sample,features, on=['Store','Date'])
+    sample = pd.merge(sample, features, on=['Store', 'Date'])
 
     # Extract features from the Date
     sample['Date'] = pd.to_datetime(sample['Date'])
     sample['WeekOfYear'] = sample['Date'].dt.weekofyear
     sample['Year'] = sample['Date'].dt.year
     return sample
+
 
 train = extractFeatures(train, features)
 
@@ -91,8 +92,8 @@ train = extractFeatures(train, features)
 
 n_splits = 8
 
-predCols = ['Store', 'Dept', 'WeekOfYear','Year', 'IsHoliday_x','Temperature',
-            'Fuel_Price']
+predCols = ['Store', 'Dept', 'WeekOfYear', 'Year', 'IsHoliday_x',
+            'Temperature', 'Fuel_Price']
 
 # %% XGBoost
 
@@ -115,18 +116,20 @@ def findXGBErrorOnFit(n_splits, train, predCols):
         CVY = CVMod['Weekly_Sales']
         pipe.fit(trainX, trainY)
         prediction = pipe.predict(CVX)
-        CVerror += mean_absolute_error(CVY, prediction)
+        sampleWeights = CVX.IsHoliday_x * 4 + 1
+        CVerror += mean_absolute_error(CVY, prediction,
+                                       sample_weight = sampleWeights)
 
     # Print the mean absolute error of the regressor
     CVerror /= n_splits
     print("The mean cross-validated error is ${:.2f}".format(CVerror))
     return CVerror
 
-CVerrorXGB = findXGBErrorOnFit(n_splits, train)
+CVerrorXGB = findXGBErrorOnFit(n_splits, train, predCols)
 
 # %% SVM
 
-def findSGDErrorOnFit(n_splits, train, predCols)):
+def findSGDErrorOnFit(n_splits, train, predCols):
     tsCV = TimeSeriesSplit(n_splits=n_splits)
 
     pipe = Pipeline([
@@ -144,14 +147,16 @@ def findSGDErrorOnFit(n_splits, train, predCols)):
         CVY = CVMod['Weekly_Sales']
         pipe.fit(trainX, trainY)
         prediction = pipe.predict(CVX)
-        CVerror += mean_absolute_error(CVY, prediction)
+        sampleWeights = CVX.IsHoliday_x * 4 + 1
+        CVerror += mean_absolute_error(CVY, prediction,
+                                       sample_weight = sampleWeights)
 
     # Print the mean absolute error of the regressor
     CVerror /= n_splits
     print("The mean cross-validated error is ${:.2f}".format(CVerror))
     return CVerror
 
-CVerrorSGD = findSGDErrorOnFit(n_splits, train)
+CVerrorSGD = findSGDErrorOnFit(n_splits, train, predCols)
 
 # %% Test prediction and submission
 
