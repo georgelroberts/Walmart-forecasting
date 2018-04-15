@@ -20,6 +20,7 @@ from sklearn.linear_model import SGDRegressor
 from sklearn.svm import SVR
 from pandas.tools.plotting import autocorrelation_plot
 from fbprophet import Prophet
+from collections import defaultdict
 import xgboost as xgb
 import warnings
 import logging
@@ -72,6 +73,28 @@ def dataDescription(train):
     print("The mean weekly sales on holidays is {:.2f} ".format(holidaySales) +
           "and then {:.2f} for non-holidays.".format(nonHolidaySales))
 
+    # Lets looks at how complete the data is. Create a series with all possible
+    # dates in. Compare with each store and department.
+    trainDates = pd.to_datetime(train.Date)
+    trainDates = pd.DatetimeIndex(trainDates.unique())
+#    First confirm there are no missing dates in the whole range.
+#    trainDatesTest = pd.date_range(trainDates.min(),
+#                                   trainDates.max(), freq='7D')
+#    (trainDates == trainDatesTest).all()
+    stores = np.unique(train['Store'])
+    depts = np.unique(train['Dept'])
+    missingDates = defaultdict(int)
+    for store in stores:
+        for dept in depts:
+            trainThis = train[train['Store'] == store]
+            trainThis = trainThis[trainThis['Dept'] == dept]
+            missing = len(trainDates) - len(pd.DatetimeIndex(trainThis.Date))
+            missingDates[missing] += 1
+
+    # The majority miss nothing. 314 stores don't have certain departments
+    # - as can be expected!
+    fig, ax = plt.subplots()
+    ax.bar(list(missingDates.keys()), missingDates.values())
 
 dataDescription(train)
 
@@ -194,8 +217,8 @@ def findFBProphertErrorOnFit(n_splits, train, predCols):
         for dept in depts:
             trainThis = train[train['Store'] == store]
             trainThis = trainThis[trainThis['Dept'] == dept]
-            if len(trainThis.index) > n_splits:
-                # Only fit if department and store exist + have enough samples
+            if len(trainThis.index) > 142:
+                # Only fit if all dates available
                 for train_ind, CV_ind in tsCV.split(trainThis):
                     trainMod = trainThis.iloc[train_ind]
                     CVMod = trainThis.iloc[CV_ind]
