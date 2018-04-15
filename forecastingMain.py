@@ -6,8 +6,6 @@ Created on Tue Apr 10 16:12:07 2018
 
 Identify the forecasted Walmart sales from time-series data
 
-TODO: Merge the features for each store
-TODO: Create a submission
 """
 
 import os
@@ -19,9 +17,16 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
 from sklearn.linear_model import SGDRegressor
+from sklearn.svm import SVR
+from pandas.tools.plotting import autocorrelation_plot
+from fbprophet import Prophet
 import xgboost as xgb
 import warnings
+import logging
+logging.getLogger('fbprophet').setLevel(logging.WARNING)
 warnings.simplefilter(action='ignore', category=FutureWarning)
+
+
 
 # %% First load the data
 
@@ -44,19 +49,22 @@ def dataDescription(train):
     fig, ax = plt.subplots()
     salesByDate = train.groupby('Date').mean().Weekly_Sales
     salesByDate.plot()
-
+    plt.show()
+    fig, ax = plt.subplots()
+    autocorrelation_plot(salesByDate)
+    plt.show()
     # Lets plot all store's sales by date on the same graph
     salesByStore = train.groupby(by=['Store', 'Date']).mean().Weekly_Sales
     salesByStore.unstack(level=0).plot()
-
     # Lets plot all department's sales by date on the same graph
     salesByStore = train.groupby(by=['Dept', 'Date']).mean().Weekly_Sales
     salesByStore.unstack(level=0).plot()
-
     # It looks like all stores have peaks at the same times, however just a
     # single department. Could this be the holiday department?
+    fig, ax = plt.subplots()
     holidayDates = train.groupby('Date').mean().IsHoliday
     holidayDates.plot()
+    plt.show()
     # Very few holiday days...
     # What are the average sales on holidays vs not holidays
     holidaySales = train[train['IsHoliday'] == True].Weekly_Sales.mean()
@@ -111,6 +119,7 @@ def findXGBErrorOnFit(n_splits, train, predCols):
 
     CVerror = 0
     for train_ind, CV_ind in tsCV.split(train):
+        train.sort_values(by='Date', inplace=True)
         trainMod = train.iloc[train_ind]
         CVMod = train.iloc[CV_ind]
 
@@ -122,16 +131,18 @@ def findXGBErrorOnFit(n_splits, train, predCols):
         prediction = pipe.predict(CVX)
         sampleWeights = CVX.IsHoliday_x * 4 + 1
         CVerror += mean_absolute_error(CVY, prediction,
-                                       sample_weight = sampleWeights)
+                                       sample_weight=sampleWeights)
 
     # Print the mean absolute error of the regressor
     CVerror /= n_splits
     print("The mean cross-validated error is ${:.2f}".format(CVerror))
     return CVerror
 
+
 CVerrorXGB = findXGBErrorOnFit(n_splits, train, predCols)
 
-# %% SVM
+# %% SGD fit
+
 
 def findSGDErrorOnFit(n_splits, train, predCols):
     """ Use the time series split to create cross validation sets and measure
@@ -141,10 +152,12 @@ def findSGDErrorOnFit(n_splits, train, predCols):
 
     pipe = Pipeline([
             ('scal', StandardScaler()),
-            ('clf', SGDRegressor())])
+            ('clf', SGDRegressor(learning_rate='optimal', alpha=0.001))])
+            #('clf', SVR(kernel='linear'))])
 
     CVerror = 0
     for train_ind, CV_ind in tsCV.split(train):
+        train.sort_values(by='Date', inplace=True)
         trainMod = train.iloc[train_ind]
         CVMod = train.iloc[CV_ind]
 
@@ -156,27 +169,73 @@ def findSGDErrorOnFit(n_splits, train, predCols):
         prediction = pipe.predict(CVX)
         sampleWeights = CVX.IsHoliday_x * 4 + 1
         CVerror += mean_absolute_error(CVY, prediction,
-                                       sample_weight = sampleWeights)
+                                       sample_weight=sampleWeights)
 
     # Print the mean absolute error of the regressor
     CVerror /= n_splits
     print("The mean cross-validated error is ${:.2f}".format(CVerror))
     return CVerror
 
+
 CVerrorSGD = findSGDErrorOnFit(n_splits, train, predCols)
 
+# %% XGBoost
+
+def findFBProphertErrorOnFit(n_splits, train, predCols):
+    """ Use the time series split to create cross validation sets and measure
+    the average error across all of them after fitting with FBProphet"""
+    tsCV = TimeSeriesSplit(n_splits=2)
+
+    CVerror = 0
+    stores = np.unique(train['Store'])
+    depts = np.unique(train['Dept'])
+    n = 0
+    for store in stores:
+        for dept in depts:
+            trainThis = train[train['Store'] == store]
+            trainThis = trainThis[trainThis['Dept'] == dept]
+            if len(trainThis.index) > n_splits:
+                # Only fit if department and store exist + have enough samples
+                for train_ind, CV_ind in tsCV.split(trainThis):
+                    trainMod = trainThis.iloc[train_ind]
+                    CVMod = trainThis.iloc[CV_ind]
+                    trainFB = pd.DataFrame()
+                    trainFB['ds'] = trainMod['Date'].astype(str)
+                    trainFB['y'] = trainMod['Weekly_Sales']
+                    m = Prophet()
+                    m.fit(trainFB)
+                    CVx = pd.DataFrame()
+                    CVx['ds'] = CVMod['Date'].astype(str)
+                    CVy = CVMod['Weekly_Sales']
+                    prediction = m.predict(CVx)
+                    n += 1
+                    sampleWeights = CVMod.IsHoliday_x * 4 + 1
+                    CVerror += mean_absolute_error(CVy, prediction.yhat,
+                                                   sample_weight=sampleWeights)
+                print("{} out of {} departments".format(dept,len(depts)))
+        print("{} out of {} stores".format(store,len(stores)))
+
+    # Print the mean absolute error of the regressor
+    CVerror /= (n_splits + n)
+    print("The mean cross-validated error is ${:.2f}".format(CVerror))
+    return CVerror
+
+
+CVerrorFB = findFBProphertErrorOnFit(n_splits, train, predCols)
+
 # %% Test prediction and submission
+
 
 def predictAndSubmit(train, features, predCols):
     """ Reformat the data for submission and save the generated predictions"""
     realTest = pd.read_csv('Data\\test.csv')
-    sub = pd.DataFrame()
-    sub['Id'] = (realTest['Store'].map(str) + '_' +
-                 realTest['Dept'].map(str) + '_' +
-                 realTest['Date'].map(str))
+    realTest['Id'] = (realTest['Store'].map(str) + '_' +
+                      realTest['Dept'].map(str) + '_' +
+                      realTest['Date'].map(str))
 
     realTest = extractFeatures(realTest, features)
     realTestX = realTest[predCols]
+
     pipe = Pipeline([('scal', StandardScaler()),
                      ('clf', xgb.XGBRegressor(learning_rate=0.07, max_depth=6,
                                               n_estimators=100))])
@@ -184,7 +243,19 @@ def predictAndSubmit(train, features, predCols):
     trainY = train['Weekly_Sales']
     pipe.fit(trainX, trainY)
     prediction = pipe.predict(realTestX)
-    sub['Weekly_Sales'] = prediction
-    sub.to_csv('Output\\XGBSubmission.csv', index=False)
+    realTest['Weekly_Sales'] = prediction
+    realTest[['Id', 'Weekly_Sales']].to_csv('Output\\XGBSubmission.csv',
+                                            index=False)
+
+    pipe = Pipeline([('scal', StandardScaler()),
+                     ('clf', SGDRegressor())])
+    pipe.fit(trainX, trainY)
+    prediction = pipe.predict(realTestX)
+    realTest['Weekly_Sales'] = prediction
+    realTest[['Id', 'Weekly_Sales']].to_csv('Output\\SGDSubmission.csv',
+                                            index=False)
 
 
+    # XGBScore = 7972.37008
+
+predictAndSubmit(train, features, predCols)
