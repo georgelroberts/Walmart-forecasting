@@ -123,7 +123,7 @@ train = extractFeatures(train, features)
 
 # Only use features if they have no NaNs for the moment
 
-n_splits = 4
+n_splits = 2
 
 predCols = ['Store', 'Dept', 'WeekOfYear', 'Year', 'IsHoliday_x',
             'Temperature', 'Fuel_Price']
@@ -202,7 +202,17 @@ def findSGDErrorOnFit(n_splits, train, predCols):
 
 CVerrorSGD = findSGDErrorOnFit(n_splits, train, predCols)
 
-# %% XGBoost
+# %% FBProphet
+
+
+def extractStoreDeptCombos(df):
+    """ Not all stores have certain departments, so use only those that
+    exist"""
+    storeDepts = df[['Store', 'Dept']]
+    storeDepts = storeDepts.drop_duplicates(subset=['Store', 'Dept'],
+                                            keep='first')
+    return storeDepts
+
 
 def findFBProphertErrorOnFit(n_splits, train, predCols):
     """ Use the time series split to create cross validation sets and measure
@@ -210,33 +220,30 @@ def findFBProphertErrorOnFit(n_splits, train, predCols):
     tsCV = TimeSeriesSplit(n_splits=2)
 
     CVerror = 0
-    stores = np.unique(train['Store'])
-    depts = np.unique(train['Dept'])
+    storeDepts = extractStoreDeptCombos(train)
     n = 0
-    for store in stores:
-        for dept in depts:
-            trainThis = train[train['Store'] == store]
-            trainThis = trainThis[trainThis['Dept'] == dept]
-            if len(trainThis.index) > 142:
-                # Only fit if all dates available
-                for train_ind, CV_ind in tsCV.split(trainThis):
-                    trainMod = trainThis.iloc[train_ind]
-                    CVMod = trainThis.iloc[CV_ind]
-                    trainFB = pd.DataFrame()
-                    trainFB['ds'] = trainMod['Date'].astype(str)
-                    trainFB['y'] = trainMod['Weekly_Sales']
-                    m = Prophet()
-                    m.fit(trainFB)
-                    CVx = pd.DataFrame()
-                    CVx['ds'] = CVMod['Date'].astype(str)
-                    CVy = CVMod['Weekly_Sales']
-                    prediction = m.predict(CVx)
-                    n += 1
-                    sampleWeights = CVMod.IsHoliday_x * 4 + 1
-                    CVerror += mean_absolute_error(CVy, prediction.yhat,
-                                                   sample_weight=sampleWeights)
-                print("{} out of {} departments".format(dept,len(depts)))
-        print("{} out of {} stores".format(store,len(stores)))
+    for store, dept in storeDepts.itertuples(index=False):
+        trainThis = train[train['Store'] == store]
+        trainThis = trainThis[trainThis['Dept'] == dept]
+        if len(trainThis.index) > 142:
+            # Only fit if all dates available
+            for train_ind, CV_ind in tsCV.split(trainThis):
+                trainMod = trainThis.iloc[train_ind]
+                CVMod = trainThis.iloc[CV_ind]
+                trainFB = pd.DataFrame()
+                trainFB['ds'] = trainMod['Date'].astype(str)
+                trainFB['y'] = trainMod['Weekly_Sales']
+                m = Prophet()
+                m.fit(trainFB)
+                CVx = pd.DataFrame()
+                CVx['ds'] = CVMod['Date'].astype(str)
+                CVy = CVMod['Weekly_Sales']
+                prediction = m.predict(CVx)
+                n += 1
+                sampleWeights = CVMod.IsHoliday_x * 4 + 1
+                CVerror += mean_absolute_error(CVy, prediction.yhat,
+                                               sample_weight=sampleWeights)
+            print("Store: {} Dept: {}".format(store, dept))
 
     # Print the mean absolute error of the regressor
     CVerror /= (n_splits + n)
@@ -278,7 +285,46 @@ def predictAndSubmit(train, features, predCols):
     realTest[['Id', 'Weekly_Sales']].to_csv('Output\\SGDSubmission.csv',
                                             index=False)
 
+    testDates = pd.to_datetime(realTest.Date)
+    testDates = pd.DatetimeIndex(testDates.unique())
+    storeDepts = extractStoreDeptCombos(realTest)
+    noNotFit = 0
+    allPred = pd.DataFrame()
+    for store, dept in storeDepts.itertuples(index=False):
+        trainThis = train[train['Store'] == store]
+        trainThis = trainThis[trainThis['Dept'] == dept]
+        if len(trainThis.index) > 142:
+            # Only fit if all dates available
+            trainFB = pd.DataFrame()
+            trainFB['ds'] = trainThis['Date'].astype(str)
+            trainFB['y'] = trainThis['Weekly_Sales']
+            m = Prophet()
+            m.fit(trainFB)
+            realTestFBx = pd.DataFrame()
+            realTestFBx['ds'] = testDates
+            prediction = m.predict(realTestFBx)
+            predRows = pd.DataFrame({'Store':store, 'Dept':dept,
+                                     'Date':testDates, 'y':prediction.yhat})
+        else:
+            print("Not enough Data")
+            noNotFit += 1
+        print("Store: {} Dept: {}".format(store, dept))
+        allPred = allPred.append(predRows, ignore_index=True)
+
+    print("{} store-date combos not fit".format(noNotFit))
+
+    allPred.drop_duplicates(inplace=True)
+    realSub = pd.merge(realTest[['Store','Date','Dept', 'Id']], allPred,
+                       on=['Store','Date','Dept'], how='left')
+
+    # Fill all NaNs wit the total mean. This could be more advanced obviously,
+    # but this will do for the time being
+    realSub['y'].fillna((realSub['y'].mean()), inplace=True)
+    realSub = realSub[['Id', 'y']]
+    realSub.columns = ['Id', 'Weekly_Sales']
+    realSub.to_csv('Output\\FBProphetSubmission.csv',index=False)
 
     # XGBScore = 7972.37008
+    # FBProphet score = 5357.68674
 
 predictAndSubmit(train, features, predCols)
