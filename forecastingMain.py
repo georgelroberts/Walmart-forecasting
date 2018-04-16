@@ -303,8 +303,8 @@ def predictAndSubmit(train, features, predCols):
             realTestFBx = pd.DataFrame()
             realTestFBx['ds'] = testDates
             prediction = m.predict(realTestFBx)
-            predRows = pd.DataFrame({'Store':store, 'Dept':dept,
-                                     'Date':testDates, 'y':prediction.yhat})
+            predRows = pd.DataFrame({'Store': store, 'Dept': dept,
+                                     'Date': testDates, 'y': prediction.yhat})
         else:
             print("Not enough Data")
             noNotFit += 1
@@ -314,17 +314,25 @@ def predictAndSubmit(train, features, predCols):
     print("{} store-date combos not fit".format(noNotFit))
 
     allPred.drop_duplicates(inplace=True)
-    realSub = pd.merge(realTest[['Store','Date','Dept', 'Id']], allPred,
-                       on=['Store','Date','Dept'], how='left')
+    realSub = pd.merge(realTest[['Store', 'Date', 'Dept', 'Id']], allPred,
+                       on=['Store', 'Date', 'Dept'], how='left')
 
     # Fill all NaNs wit the total mean. This could be more advanced obviously,
     # but this will do for the time being
     realSub['y'].fillna((realSub['y'].mean()), inplace=True)
     realSub = realSub[['Id', 'y']]
     realSub.columns = ['Id', 'Weekly_Sales']
-    realSub.to_csv('Output\\FBProphetSubmission.csv',index=False)
+    realSub.to_csv('Output\\FBProphetSubmission.csv', index=False)
 
     # XGBScore = 7972.37008
     # FBProphet score = 5357.68674
+
+    FBSub = pd.read_csv('Output\\FBProphetSubmission.csv')
+    XGSub = pd.read_csv('Output\\XGBSubmission.csv')
+    ensembleSub = pd.DataFrame((FBSub['Weekly_Sales']*3/4
+                                + XGSub['Weekly_Sales']*1/4))
+    ensembleSub['Id'] = FBSub['Id']
+    ensembleSub[['Id', 'Weekly_Sales']].to_csv(
+            'Output\\EnsembleSubmission.csv', index=False)
 
 predictAndSubmit(train, features, predCols)
