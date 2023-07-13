@@ -209,9 +209,7 @@ def extractStoreDeptCombos(df):
     """ Not all stores have certain departments, so use only those that
     exist"""
     storeDepts = df[['Store', 'Dept']]
-    storeDepts = storeDepts.drop_duplicates(subset=['Store', 'Dept'],
-                                            keep='first')
-    return storeDepts
+    return storeDepts.drop_duplicates(subset=['Store', 'Dept'], keep='first')
 
 
 def findFBProphertErrorOnFit(n_splits, train, predCols):
@@ -243,7 +241,7 @@ def findFBProphertErrorOnFit(n_splits, train, predCols):
                 sampleWeights = CVMod.IsHoliday_x * 4 + 1
                 CVerror += mean_absolute_error(CVy, prediction.yhat,
                                                sample_weight=sampleWeights)
-            print("Store: {} Dept: {}".format(store, dept))
+            print(f"Store: {store} Dept: {dept}")
 
     # Print the mean absolute error of the regressor
     CVerror /= (n_splits + n)
@@ -308,10 +306,10 @@ def predictAndSubmit(train, features, predCols):
         else:
             print("Not enough Data")
             noNotFit += 1
-        print("Store: {} Dept: {}".format(store, dept))
+        print(f"Store: {store} Dept: {dept}")
         allPred = allPred.append(predRows, ignore_index=True)
 
-    print("{} store-date combos not fit".format(noNotFit))
+    print(f"{noNotFit} store-date combos not fit")
 
     allPred.drop_duplicates(inplace=True)
     realSub = pd.merge(realTest[['Store', 'Date', 'Dept', 'Id']], allPred,
